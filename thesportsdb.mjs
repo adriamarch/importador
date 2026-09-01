@@ -3,10 +3,22 @@
 //
 // Límites del plan gratuito relevantes aquí:
 //  - 30 peticiones/minuto (429 si se supera; ver esperar() más abajo).
-//  - eventsnextleague.php / eventspastleague.php: 1 petición de "limit"
-//    por liga (free), devuelve las próximas/últimas ~15 según la API.
-//  - search_all_leagues.php: limitado a 10 resultados en el plan free,
-//    así que NO lo usamos para resolver ligas (ver resolverLigaPorNombre).
+//  - eventsnextleague.php / eventspastleague.php: LIMITADO A 1 EVENTO
+//    por petición en el plan free (confirmado el 2026-09-01 contra la
+//    API real — la doc antigua/comentarios previos de este archivo
+//    decían "~15", pero TheSportsDB bajó el límite y ahora devuelve
+//    literalmente 1 evento, sin importar la liga). Por eso NO se usan
+//    para traer el calendario: solo servirían para "ir arrastrando" 1
+//    partido por ejecución, inservible para tener cobertura real.
+//  - eventsseason.php: SÍ funciona en el plan free y devuelve la
+//    temporada COMPLETA de una liga de una sola vez (confirmado con
+//    idLeague=4400, ~100+ eventos). Es el endpoint que usamos ahora
+//    para traer partidos (ver eventosTemporada más abajo).
+//  - search_all_leagues.php / all_leagues.php: limitados a ~10
+//    resultados en el plan free, así que NO se usan para resolver
+//    ligas por nombre (ver resolverLigaConocida: los IDs se confirman
+//    a mano contra lookupleague.php y se guardan fijos en
+//    LIGAS_CONOCIDAS).
 
 const API_KEY = process.env.THESPORTSDB_API_KEY || "123";
 const BASE_URL = `https://www.thesportsdb.com/api/v1/json/${API_KEY}`;
@@ -59,15 +71,50 @@ async function peticionJson(url, { reintentos = 3 } = {}) {
   return resp.json();
 }
 
-/** Próximos partidos programados de una liga (hasta ~15 en plan free). */
+/**
+ * Próximos partidos programados de una liga.
+ * OJO: el plan free de TheSportsDB limita este endpoint a 1 evento por
+ * petición (ver comentario de cabecera). Se deja exportada por si algún
+ * caller la necesita puntualmente, pero import-partidos.mjs ya NO la usa
+ * para el import principal — usa eventosTemporada() en su lugar.
+ */
 export async function eventosProximos(idLeague) {
   const data = await peticionJson(`${BASE_URL}/eventsnextleague.php?id=${idLeague}`);
   return data.events || [];
 }
 
-/** Últimos partidos jugados de una liga (hasta ~15 en plan free). */
+/**
+ * Últimos partidos jugados de una liga.
+ * Mismo aviso que eventosProximos: limitado a 1 evento en plan free.
+ */
 export async function eventosPasados(idLeague) {
   const data = await peticionJson(`${BASE_URL}/eventspastleague.php?id=${idLeague}`);
+  return data.events || [];
+}
+
+/**
+ * Temporada actual configurada para una liga (strCurrentSeason de
+ * lookupleague.php). Se resuelve dinámicamente en vez de hardcodearla
+ * porque distintas ligas pueden estar en temporadas distintas y ese
+ * valor puede quedarse desactualizado en TheSportsDB para ligas menos
+ * mantenidas (visto en pruebas: alguna liga devolvía "2019-2020").
+ */
+export async function temporadaActual(idLeague) {
+  const data = await peticionJson(`${BASE_URL}/lookupleague.php?id=${idLeague}`);
+  const liga = (data.leagues || [])[0];
+  return liga?.strCurrentSeason || null;
+}
+
+/**
+ * Todos los partidos de una liga en una temporada dada, en una sola
+ * petición (eventsseason.php SÍ funciona sin recortar en el plan free,
+ * a diferencia de eventsnextleague/eventspastleague). Esta es la vía
+ * recomendada para traer el calendario completo de una liga.
+ */
+export async function eventosTemporada(idLeague, temporada) {
+  const data = await peticionJson(
+    `${BASE_URL}/eventsseason.php?id=${idLeague}&s=${encodeURIComponent(temporada)}`
+  );
   return data.events || [];
 }
 

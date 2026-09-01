@@ -4,11 +4,13 @@
 //  1. Se asegura de que existen las columnas/tablas de la migración
 //     migracion_relleno_automatico.sql (external_id, equipo_alias_externo,
 //     sync_partidos_auto) — las crea si faltan, no falla si ya existen.
-//  2. Resuelve los idLeague de las ligas configuradas (algunos ya
-//     confirmados a mano, los de Segunda Federación pendientes se
-//     verifican en caliente contra la API).
-//  3. Para cada liga, trae próximos partidos (eventsnextleague) y
-//     últimos jugados (eventspastleague).
+//  2. Resuelve los idLeague de las ligas configuradas (todos fijos y
+//     confirmados a mano en LIGAS_CONOCIDAS, ver thesportsdb.mjs).
+//  3. Para cada liga, resuelve su temporada actual y trae TODOS sus
+//     partidos de golpe vía eventsseason.php (eventsnextleague.php y
+//     eventspastleague.php están limitados a 1 evento por petición en
+//     el plan free de TheSportsDB, así que no sirven para esto — ver
+//     comentario de cabecera en thesportsdb.mjs).
 //  4. Para cada partido: convierte la hora UTC de la API a hora de
 //     Madrid SIN zona horaria (el formato que espera fecha_partido) y
 //     hace upsert en la tabla results usando external_id como clave de
@@ -24,13 +26,7 @@
 
 import { ejecutarD1, escaparValorD1 } from "./d1-client.mjs";
 import { eventoAFechaPartidoMadrid, soloFecha } from "./tiempo.mjs";
-import {
-  LIGAS_CONOCIDAS,
-  IDS_CANDIDATOS_SEGUNDA_FEDERACION,
-  eventosProximos,
-  eventosPasados,
-  verificarLiga,
-} from "./thesportsdb.mjs";
+import { LIGAS_CONOCIDAS, temporadaActual, eventosTemporada } from "./thesportsdb.mjs";
 
 const FUENTE = "auto_thesportsdb";
 
@@ -92,32 +88,13 @@ async function asegurarSchema() {
 }
 
 // ---------- Paso 2: resolver ligas ----------
+//
+// Todos los idLeague ya están confirmados a mano y fijos en
+// LIGAS_CONOCIDAS (ver thesportsdb.mjs) — ya no hace falta resolver
+// nada en caliente por nombre.
 
-async function resolverTodasLasLigas() {
-  const ligas = { ...LIGAS_CONOCIDAS };
-
-  for (const [clave, { candidatos, fragmento }] of Object.entries(IDS_CANDIDATOS_SEGUNDA_FEDERACION)) {
-    let encontrada = null;
-    for (const idCandidato of candidatos) {
-      try {
-        const resultado = await verificarLiga(idCandidato, fragmento);
-        if (resultado) {
-          encontrada = resultado;
-          break;
-        }
-      } catch (err) {
-        log(`Aviso: fallo verificando idLeague=${idCandidato} para ${clave}: ${err.message}`);
-      }
-    }
-    if (encontrada) {
-      ligas[clave] = { idLeague: encontrada.idLeague, nombre: encontrada.nombre };
-      log(`Liga resuelta: ${clave} -> idLeague=${encontrada.idLeague} (${encontrada.nombre})`);
-    } else {
-      log(`AVISO: no se pudo resolver la liga "${clave}" contra ningún ID candidato (${candidatos.join(", ")}). Se omite esta liga en esta ejecución — revisa IDS_CANDIDATOS_SEGUNDA_FEDERACION en thesportsdb.mjs.`);
-    }
-  }
-
-  return ligas;
+function resolverTodasLasLigas() {
+  return { ...LIGAS_CONOCIDAS };
 }
 
 // ---------- Paso 3+4: traer eventos y convertirlos ----------
@@ -245,7 +222,7 @@ async function main() {
 
   try {
     await asegurarSchema();
-    const ligas = await resolverTodasLasLigas();
+    const ligas = resolverTodasLasLigas();
     const aliasMap = await cargarAliasEquipos();
 
     for (const [clave, liga] of Object.entries(ligas)) {
@@ -254,11 +231,16 @@ async function main() {
 
       let eventos = [];
       try {
-        const [proximos, pasados] = await Promise.all([
-          eventosProximos(liga.idLeague),
-          eventosPasados(liga.idLeague),
-        ]);
-        eventos = [...proximos, ...pasados];
+        // eventsnextleague/eventspastleague están limitados a 1 evento
+        // por petición en el plan free de TheSportsDB (confirmado
+        // 2026-09-01), así que usamos eventsseason.php para traer la
+        // temporada completa de una sola vez.
+        const temporada = await temporadaActual(liga.idLeague);
+        if (!temporada) {
+          log(`AVISO: no se pudo resolver la temporada actual de ${clave} (idLeague=${liga.idLeague}). Se omite esta liga en esta ejecución.`);
+          continue;
+        }
+        eventos = await eventosTemporada(liga.idLeague, temporada);
       } catch (err) {
         log(`ERROR trayendo eventos de ${clave}: ${err.message}`);
         contadores.error++;
