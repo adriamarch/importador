@@ -20,19 +20,18 @@ const BASE_URL = `https://www.thesportsdb.com/api/v1/json/${API_KEY}`;
 // LIGAS_CACHE_PATH para no tener que repetir la búsqueda cada vez.
 export const LIGAS_CONOCIDAS = {
   hypermotion: { idLeague: "4400", nombre: "Spanish La Liga 2", grupo: null },
-  primera_federacion_grupo_1: { idLeague: "5086", nombre: "Spanish Primera RFEF Group 1", grupo: "Grupo 1" },
-  primera_federacion_grupo_2: { idLeague: "5088", nombre: "Spanish Primera RFEF Group 2", grupo: "Grupo 2" },
+  primera_federacion_grupo_1: { idLeague: "5086", nombre: "Spanish Primera Federación Group 1", grupo: "Grupo 1" },
+  primera_federacion_grupo_2: { idLeague: "5088", nombre: "Spanish Primera Federación Group 2", grupo: "Grupo 2" },
+  // Confirmados manualmente contra lookupleague.php el 2026-09-01 (ver
+  // conversación de soporte): los 5 grupos de Segunda Federación SÍ
+  // existen con estos IDs. El fallo anterior era de comparación de
+  // nombre en verificarLiga (buscaba "RFEF"; la API devuelve "Federación").
+  segunda_federacion_grupo_1: { idLeague: "5087", nombre: "Spanish Segunda Federación Group 1", grupo: "Grupo 1" },
+  segunda_federacion_grupo_2: { idLeague: "5089", nombre: "Spanish Segunda Federación Group 2", grupo: "Grupo 2" },
+  segunda_federacion_grupo_3: { idLeague: "5090", nombre: "Spanish Segunda Federación Group 3", grupo: "Grupo 3" },
+  segunda_federacion_grupo_4: { idLeague: "5091", nombre: "Spanish Segunda Federación Group 4", grupo: "Grupo 4" },
+  segunda_federacion_grupo_5: { idLeague: "5092", nombre: "Spanish Segunda Federación Group 5", grupo: "Grupo 5" },
 };
-
-// Nombres a buscar para los 5 grupos de Segunda Federación, no
-// confirmados aún por ID. Se resuelven por nombre en resolverLigasPendientes().
-export const LIGAS_A_RESOLVER = [
-  { clave: "segunda_federacion_grupo_1", nombreBusqueda: "Segunda RFEF Group 1", grupo: "Grupo 1" },
-  { clave: "segunda_federacion_grupo_2", nombreBusqueda: "Segunda RFEF Group 2", grupo: "Grupo 2" },
-  { clave: "segunda_federacion_grupo_3", nombreBusqueda: "Segunda RFEF Group 3", grupo: "Grupo 3" },
-  { clave: "segunda_federacion_grupo_4", nombreBusqueda: "Segunda RFEF Group 4", grupo: "Grupo 4" },
-  { clave: "segunda_federacion_grupo_5", nombreBusqueda: "Segunda RFEF Group 5", grupo: "Grupo 5" },
-];
 
 let ultimaPeticionEn = 0;
 const MIN_MS_ENTRE_PETICIONES = 2100; // ~28/min, margen bajo el límite de 30/min free
@@ -83,6 +82,11 @@ export function resolverLigaConocida(clave) {
   return LIGAS_CONOCIDAS[clave] || null;
 }
 
+// Ya no quedan ligas pendientes de resolver por nombre: los 5 grupos de
+// Segunda Federación se movieron a LIGAS_CONOCIDAS (ver arriba). Se deja
+// el array vacío por compatibilidad, por si import-partidos.mjs lo importa.
+export const LIGAS_A_RESOLVER = [];
+
 /**
  * Verifica un idLeague candidato contra lookupleague.php y comprueba
  * que su nombre coincide (aproximadamente) con el esperado. Se usa para
@@ -101,13 +105,16 @@ export async function verificarLiga(idLeague, fragmentoNombreEsperado) {
   return coincide ? { idLeague, nombre: liga.strLeague } : null;
 }
 
-// IDs candidatos a probar para los grupos de Segunda Federación que no
-// se pudieron confirmar de antemano (ver conversación de configuración).
-// El script los verifica uno a uno con verificarLiga() al arrancar.
+// NOTA (2026-09-01): los 5 grupos de Segunda Federación ya están
+// confirmados y movidos a LIGAS_CONOCIDAS de forma fija. Se mantiene
+// esta tabla solo por compatibilidad, con el fragmento corregido
+// ("Federación" en vez de "RFEF", que nunca aparecía en strLeague y
+// hacía que verificarLiga() descartara siempre los candidatos, aunque
+// fueran correctos) por si algún caller todavía la usa como fallback.
 export const IDS_CANDIDATOS_SEGUNDA_FEDERACION = {
-  segunda_federacion_grupo_1: { candidatos: ["5087"], fragmento: "Segunda RFEF Group 1" },
-  segunda_federacion_grupo_2: { candidatos: ["5089"], fragmento: "Segunda RFEF Group 2" },
-  segunda_federacion_grupo_3: { candidatos: ["5090", "5092", "5093"], fragmento: "Segunda RFEF Group 3" },
-  segunda_federacion_grupo_4: { candidatos: ["5091"], fragmento: "Segunda RFEF Group 4" },
-  segunda_federacion_grupo_5: { candidatos: ["5092", "5090", "5093"], fragmento: "Segunda RFEF Group 5" },
+  segunda_federacion_grupo_1: { candidatos: ["5087"], fragmento: "Segunda Federación Group 1" },
+  segunda_federacion_grupo_2: { candidatos: ["5089"], fragmento: "Segunda Federación Group 2" },
+  segunda_federacion_grupo_3: { candidatos: ["5090"], fragmento: "Segunda Federación Group 3" },
+  segunda_federacion_grupo_4: { candidatos: ["5091"], fragmento: "Segunda Federación Group 4" },
+  segunda_federacion_grupo_5: { candidatos: ["5092"], fragmento: "Segunda Federación Group 5" },
 };
