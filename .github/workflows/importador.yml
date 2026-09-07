@@ -1,0 +1,31 @@
+name: importador
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}  # permite ejecutarlo manualmente desde GitHub para probar
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15  # ajusta si el import tarda más; evita jobs colgados
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Ejecutar importador
+        run: npm run import:partidos
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # añade aquí el resto de variables cuando me confirmes los nombres
+          # NOMBRE_VARIABLE: ${{ secrets.NOMBRE_VARIABLE }}
