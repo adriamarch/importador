@@ -3,26 +3,41 @@ name: importador
 on:
   schedule:
     - cron: '*/30 * * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo simular (no escribe en D1)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: importador-thesportsdb
+  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configurar Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '24.19.0'
+          node-version: '22'
 
       - name: Instalar dependencias
         run: npm install
 
+      - name: Tests
+        run: npm test
+
       - name: Ejecutar importador
         run: npm run import:partidos
         env:
+          # En las ejecuciones programadas github.event.inputs no existe -> escribe de verdad.
+          # Al lanzarlo a mano, por defecto simula (dry_run = true).
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          D1_DATABASE_NAME: ${{ secrets.D1_DATABASE_NAME }}
+          THESPORTSDB_API_KEY: ${{ secrets.THESPORTSDB_API_KEY }}

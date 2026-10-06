@@ -59,7 +59,7 @@ async function esperarRateLimit() {
 
 async function peticionJson(url, { reintentos = 3 } = {}) {
   await esperarRateLimit();
-  const resp = await fetch(url);
+  const resp = await fetch(url, { signal: AbortSignal.timeout(25000) });
   if (resp.status === 429) {
     if (reintentos <= 0) throw new Error(`Rate limit persistente en ${url}`);
     await new Promise((r) => setTimeout(r, 15000));

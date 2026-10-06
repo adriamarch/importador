@@ -22,15 +22,57 @@ espera `fecha_partido`), teniendo en cuenta el cambio de hora
 verano/invierno automáticamente (igual algoritmo que usa el worker
 principal, en sentido inverso).
 
+## Revisión (v2): qué se corrigió y por qué
+
+La v1 funcionaba para 1-2 partidos pero tenía problemas serios en producción:
+
+1. **Tardaba horas y gastaba escrituras de D1.** Hacía 2-3 llamadas a `wrangler` *por partido*
+   (unos 2.500 partidos entre las 8 ligas, varios segundos cada una) y un `UPDATE` de todos
+   los partidos en cada pasada (cada 30 min = miles de escrituras al día). Ahora lee los
+   partidos existentes **una vez**, decide en memoria y solo escribe lo que cambia, en lotes
+   (`wrangler d1 execute --file`). Una pasada son ~10 peticiones a la API + unas pocas a D1.
+2. **Pisaba partidos en directo.** Si un partido automático estaba `en_juego`/`finalizado`
+   y la API aún no traía marcador, el `UPDATE` lo devolvía a `programado` con goles `NULL`.
+   Ahora solo toca partidos en estado `programado`/`retrasado` (y el SQL lo vuelve a
+   comprobar en el `WHERE`, por si un redactor o el cron lo cambia justo en ese momento).
+3. **Saltaba los partidos del primer importador** (`auto_api_football`, con la hora en UTC)
+   como "duplicados", así que nunca se arreglaba su hora. Ahora los **adopta**: les pone
+   `external_id`, `fuente = 'auto_thesportsdb'` y la hora correcta.
+4. **El anti-duplicados fallaba cuando la jornada difería** (TheSportsDB se equivoca a menudo
+   de jornada), creando un segundo partido encima del de redacción. Ahora el cruce es
+   competición + local + visitante dentro de la temporada, sin mirar la jornada.
+5. **Ignoraba el "Calendario de jornadas" del panel.** Ahora tiene prioridad sobre `intRound`.
+6. **0-0 de relleno.** Un partido sin empezar con 0-0 en la API se marcaba `finalizado`.
+   Ahora se mira `strStatus` y que la fecha no sea futura.
+7. **Temporada.** Se usa la temporada que toca por fecha (`2026-2027` desde julio) y solo se
+   cae a `strCurrentSeason` si no hay eventos, y nunca si es de una temporada antigua.
+8. **Nombres de equipo.** Además de `equipo_alias_externo`, se casan automáticamente con los
+   nombres ya existentes en esa competición (sin tildes ni CD/UD/RC...). Lo que no case se
+   lista en el log para añadirle un alias.
+9. `ultimo_sync_ok = 0` y código de salida 1 si falla una liga o un lote (antes quedaba en verde).
+10. Timeout de 25 s en cada petición a la API, `concurrency` en el workflow y modo `DRY_RUN`.
+
+## Primera ejecución (hazla así)
+
+1. Lanza el workflow a mano (**Run workflow**, `dry_run = true` por defecto) o en local con
+   `npm run import:dry`. No escribe nada; el log enseña el plan (`creado`, `actualizado`,
+   `adoptado`, `omitido_*`), los equipos sin alias y las primeras sentencias SQL.
+2. Revisa que las 8 ligas traen eventos y que la lista de "equipos sin coincidencia" es razonable.
+   Si no, añade alias en `equipo_alias_externo` y repite.
+3. Lanza otra vez con `dry_run = false`. Comprueba un partido conocido (hora de Madrid) y
+   `sync_partidos_auto.ultimo_sync_ok = 1`.
+4. A partir de ahí corre solo cada 30 min.
+
+Secrets del repo: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_NAME`
+(opcional) y `THESPORTSDB_API_KEY` (opcional; sin ella usa la gratuita `123`).
+
 ## Archivos
 
+- `plan.mjs` — lógica pura (qué hacer con cada partido). Con tests en `test/plan.test.mjs`.
+- `import-partidos.mjs` — script principal (lee D1, pide la API, escribe en lotes).
 - `thesportsdb.mjs` — cliente de la API (rate limit, IDs de liga).
-- `tiempo.mjs` — conversión de horas UTC → Madrid sin TZ. **El archivo
-  más importante de todos**: si algo vuelve a desajustarse 1-2h, es
-  aquí donde hay que mirar primero.
-- `d1-client.mjs` — mismo mecanismo que ya usa
-  `worker-secondary/sync/d1-client.mjs` (wrangler d1 execute --remote).
-- `import-partidos.mjs` — script principal.
+- `tiempo.mjs` — conversión UTC → hora de Madrid sin zona. Si algo se desajusta 1-2 h, mira aquí primero.
+- `d1-client.mjs` — acceso a D1 vía `wrangler d1 execute --remote`.
 
 ## Ligas configuradas
 
@@ -55,49 +97,8 @@ y actualiza `IDS_CANDIDATOS_SEGUNDA_FEDERACION` en `thesportsdb.mjs`.
 
 ## Comportamiento
 
-- **Nunca pisa un partido de redacción** (`fuente = 'redaccion'`): si un
-  redactor ya creó o editó ese partido a mano, tiene prioridad absoluta.
-- Deduplica por `external_id` (el `idEvent` de TheSportsDB). Si el
-  partido ya existe con esa fuente, se actualiza (fecha, estado,
-  marcador); si no existe, se crea.
-- Red de seguridad extra: si no hay `external_id` pero ya hay un
-  partido con los mismos equipos/jornada/competición, no lo duplica.
-- Cuando el marcador ya está disponible en la API, marca el partido
-  como `finalizado` y rellena `goles_local`/`goles_visitante`. Nunca
-  escribe `en_juego` (eso lo sigue gestionando el cron del worker
-  principal + el panel de Minuto a Minuto).
-- Alias de equipos: si el nombre que da la API no coincide con el que
-  usáis en `public/js/clubs.js`, añade una fila en
-  `equipo_alias_externo` (nombre_externo → nombre_interno) desde D1
-  directamente; el script la usará en la siguiente ejecución.
-
-## Desplegar como Cron Job en Railway
-
-1. Crea un repo nuevo (o una carpeta en uno existente) con estos
-   archivos.
-2. En Railway, nuevo servicio → conecta este repo.
-3. **Start Command**: `npm run import:partidos`
-4. **Cron Schedule**: por ejemplo `*/30 * * * *` (cada 30 minutos) —
-   ajusta según el límite de 30 peticiones/minuto del plan gratuito de
-   TheSportsDB (este script ya espacia sus propias peticiones a ~28/min,
-   así que 30 min de margen entre ejecuciones es prudente).
-5. Variables de entorno necesarias (las mismas que ya usa
-   `sync/scheduler.mjs` en Railway, cópialas del servicio existente):
-   - Credenciales de Wrangler para que `npx wrangler d1 execute --remote`
-     funcione sin pedir login interactivo.
-   - `D1_DATABASE_NAME` (opcional, por defecto `elotrofutbol`).
-   - `THESPORTSDB_API_KEY` (opcional, por defecto `123`, la key
-     gratuita pública).
-
-## Primera ejecución
-
-Antes de dejarlo en cron automático, ejecútalo una vez a mano (`npm run
-import:partidos` en local, con las mismas variables de entorno) y
-revisa:
-
-1. Que resuelve las 8 ligas (mira los logs "Liga resuelta: ...").
-2. Que unos pocos partidos nuevos aparecen en D1 con
-   `fuente = 'auto_thesportsdb'` y `fecha_partido` en hora correcta
-   (compara con la hora real de un partido conocido, como hicimos con
-   Villarreal B - Algeciras).
-3. Que `sync_partidos_auto.ultimo_sync_ok = 1` tras la ejecución.
+- **Nunca pisa un partido de redacción** (`fuente = 'redaccion'`). Cuando un redactor o admin
+  edita un partido desde el panel, el worker lo marca como `redaccion` y el importador deja de tocarlo.
+- Solo modifica partidos con `fuente = 'auto_thesportsdb'` en estado `programado`/`retrasado`.
+  Nunca escribe `en_juego` (lo gestiona el cron del worker y el Minuto a Minuto).
+- Deduplica por `external_id` (`idEvent`) y, si no lo hay, por cruce de equipos en la temporada.

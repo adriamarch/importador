@@ -1,13 +1,16 @@
 {
   "name": "elotrofutbol-import-thesportsdb",
-  "version": "1.0.0",
-  "type": "module",
+  "version": "2.0.0",
   "private": true,
-  "description": "Importador periódico de partidos (Primera Federación, Segunda Federación, Hypermotion) desde TheSportsDB hacia D1.",
+  "type": "module",
+  "description": "Importador periódico de partidos (Hypermotion, Primera y Segunda Federación) desde TheSportsDB hacia D1.",
+  "engines": { "node": ">=22" },
   "scripts": {
-    "import:partidos": "node import-partidos.mjs"
+    "import:partidos": "node import-partidos.mjs",
+    "import:dry": "DRY_RUN=1 node import-partidos.mjs",
+    "test": "node --test test/plan.test.mjs"
   },
   "dependencies": {
-    "wrangler": "^3.90.0"
+    "wrangler": "^4.123.0"
   }
 }
